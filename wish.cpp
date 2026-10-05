@@ -7,6 +7,7 @@
 #include <unistd.h>
 #include <sys/types.h>
 #include <sys/wait.h>
+#include <fcntl.h>
 
 using namespace std;
 
@@ -70,7 +71,7 @@ string find_executable(const string &name)
     return "";
 }
 
-pid_t launch(const vector<string> &args)
+pid_t launch(const vector<string> &args, const string &outfile)
 {
     string prog = find_executable(args[0]);
     if (prog.empty()) {
@@ -85,6 +86,18 @@ pid_t launch(const vector<string> &args)
     }
 
     if (pid == 0) {
+        if (!outfile.empty()) {
+            int fd = open(outfile.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
+            if (fd < 0) {
+                print_error();
+                exit(1);
+            }
+            // spec wants both stdout and stderr to go into the file
+            dup2(fd, STDOUT_FILENO);
+            dup2(fd, STDERR_FILENO);
+            close(fd);
+        }
+
         // execv needs a NULL-terminated char* array; the pointers point into
         // args, which stays alive in the child until exec replaces the image
         vector<char *> argv;
@@ -101,17 +114,42 @@ pid_t launch(const vector<string> &args)
     return pid;
 }
 
-void process_line(const string &line)
+// handles one command (with optional "> file"); returns pid of the child
+// or -1 if nothing was started (built-in, empty command or error)
+pid_t run_command(const string &cmd)
 {
-    vector<string> args = parse_args(line);
+    string left = cmd;
+    string outfile;
 
+    size_t pos = cmd.find('>');
+    if (pos != string::npos) {
+        // only one '>' allowed, and exactly one filename after it
+        if (cmd.find('>', pos + 1) != string::npos) {
+            print_error();
+            return -1;
+        }
+        left = cmd.substr(0, pos);
+        vector<string> files = parse_args(cmd.substr(pos + 1));
+        if (files.size() != 1 || parse_args(left).empty()) {
+            print_error();
+            return -1;
+        }
+        outfile = files[0];
+    }
+
+    vector<string> args = parse_args(left);
     if (args.empty())
-        return;
+        return -1;
 
     if (run_builtin(args))
-        return;
+        return -1;
 
-    pid_t pid = launch(args);
+    return launch(args, outfile);
+}
+
+void process_line(const string &line)
+{
+    pid_t pid = run_command(line);
     if (pid > 0)
         waitpid(pid, nullptr, 0);
 }
@@ -134,6 +172,7 @@ int main(int argc, char *argv[])
         }
         interactive = false;
     }
+
 
     // one reference for both modes, so the loop doesn't care where input comes from
     istream &in = interactive ? cin : file;
