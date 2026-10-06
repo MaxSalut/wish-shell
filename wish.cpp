@@ -149,8 +149,19 @@ pid_t run_command(const string &cmd)
 
 void process_line(const string &line)
 {
-    pid_t pid = run_command(line);
-    if (pid > 0)
+    vector<pid_t> children;
+    stringstream ss(line);
+    string cmd;
+
+    // start every '&'-separated command first, then wait for all of them,
+    // otherwise they would just run one after another
+    while (getline(ss, cmd, '&')) {
+        pid_t pid = run_command(cmd);
+        if (pid > 0)
+            children.push_back(pid);
+    }
+
+    for (pid_t pid : children)
         waitpid(pid, nullptr, 0);
 }
 
@@ -172,7 +183,6 @@ int main(int argc, char *argv[])
         }
         interactive = false;
     }
-
 
     // one reference for both modes, so the loop doesn't care where input comes from
     istream &in = interactive ? cin : file;
